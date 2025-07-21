@@ -3,7 +3,7 @@ import pytesseract
 from pyzbar import pyzbar
 import re
 
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+pytesseract.pytesseract.tesseract_cmd = r'C:/Program Files/Tesseract-OCR/tesseract.exe'
 
 def set_best_resolution(cap):
     resolutions = [(1920, 1080), (1280, 720)]
@@ -65,7 +65,7 @@ def extrair_dados_da_etiqueta_live(frame):
 
     return resultados
 
-cap = cv2.VideoCapture(1)
+cap = cv2.VideoCapture(0)
 if not cap.isOpened():
     print("Erro: Não foi possível abrir a câmera.")
     exit()
