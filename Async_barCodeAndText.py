@@ -4,15 +4,21 @@ from pyzbar import pyzbar
 import re
 import threading
 import time
+import dataSave # Seu módulo para salvar em CSV
 
-# Caminho do Tesseract
+# --- CONFIGURAÇÕES E VARIÁVEIS GLOBAIS ---
 pytesseract.pytesseract.tesseract_cmd = r'C:/Program Files/Tesseract-OCR/tesseract.exe'
 
-# Variáveis globais
 frame_global = None
-dados_global = None
+dados_display = {
+    'barcode_rects': [],
+    'status_obj': 'AGUARDANDO...',
+    'status_end': 'AGUARDANDO...'
+}
 lock = threading.Lock()
 executando = True
+
+# --- FUNÇÕES AUXILIARES (sem grandes alterações) ---
 
 def set_best_resolution(cap):
     resolutions = [(1920, 1080), (1280, 720)]
@@ -26,127 +32,130 @@ def set_best_resolution(cap):
             return
     print(f"Usando resolução padrão: {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
 
-def extrair_dados_da_etiqueta_live(frame):
-    resultados = {
-        'barcode_info': None,
-        'ocr_info_objeto': None,
-        'ocr_info_endereco': None
-    }
-    
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+# --- THREADS DE CAPTURA E PROCESSAMENTO (LÓGICA PRINCIPAL AQUI) ---
 
-    # 1. Barcode
-    barcodes = pyzbar.decode(gray)
-    if barcodes:
-        b_info = barcodes[0]
-        b_data = b_info.data.decode('utf-8')
-        b_rect = b_info.rect
-        resultados['barcode_info'] = {'data': b_data, 'rect': b_rect}
-
-    # 2. OCR
-    thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
-    config = '-l por --psm 6'
-    texto_ocr_completo = pytesseract.image_to_string(thresh, config=config)
-
-    # 3. Regex
-    padrao_objeto = r"Objeto:\s*(\d{8})"
-    match_objeto = re.search(padrao_objeto, texto_ocr_completo, re.IGNORECASE)
-    if match_objeto:
-        resultados['ocr_info_objeto'] = {'objeto': match_objeto.group(1)}
-
-    padrao_endereco = r"(\d{3})\s+(\d{3})\s+(\d{3})\s+(\d{3})\s+(\d{3})\s+(\d{3})"
-    match_endereco = re.search(padrao_endereco, texto_ocr_completo)
-    if match_endereco:
-        resultados['ocr_info_endereco'] = {
-            'cidade': match_endereco.group(1),
-            'bairro': match_endereco.group(2),
-            'rua': match_endereco.group(3),
-            'predio': match_endereco.group(4),
-            'nivel': match_endereco.group(5),
-            'apartamento': match_endereco.group(6)
-        }
-
-    return resultados
-
-# Thread: Captura contínua de frames
 def captura_continua(cap):
+    """Thread que lê continuamente os frames da câmera."""
     global frame_global, executando
     while executando:
         ret, frame = cap.read()
-        if not ret:
-            continue
-        with lock:
-            frame_global = frame.copy()
-
-# Thread: Processamento do OCR/barcode
-def processamento_continuo():
-    global frame_global, dados_global, executando
-    while executando:
-        try:
-            time.sleep(0.05)
-            frame_copia = None
+        if ret:
             with lock:
-                if frame_global is not None:
-                    frame_copia = frame_global.copy()
-            if frame_copia is not None:
-                dados = extrair_dados_da_etiqueta_live(frame_copia)
-                with lock:
-                    dados_global = dados
-        except Exception as e:
-            print(f"[Erro na thread de processamento] {e}")
+                frame_global = frame.copy()
+        time.sleep(0.01) # Pequena pausa para não sobrecarregar a CPU
 
-# Inicialização da câmera
-cap = cv2.VideoCapture(0)
-if not cap.isOpened():
-    print("Erro: Não foi possível abrir a câmera.")
-    exit()
+def processamento_continuo():
+    """Thread que processa os frames, pareia os códigos e salva no log."""
+    global frame_global, dados_display, executando
+    
+    # Variáveis de estado locais para esta thread
+    codigo_obj = None
+    codigo_endereco = None
 
-set_best_resolution(cap)
+    while executando:
+        frame_para_processar = None
+        with lock:
+            if frame_global is not None:
+                frame_para_processar = frame_global.copy()
+        
+        if frame_para_processar is not None:
+            gray = cv2.cvtColor(frame_para_processar, cv2.COLOR_BGR2GRAY)
+            barcodes = pyzbar.decode(gray)
+            
+            barcode_rects_neste_frame = []
 
-# Início das threads
-threading.Thread(target=captura_continua, args=(cap,), daemon=True).start()
-threading.Thread(target=processamento_continuo, daemon=True).start()
+            for barcode in barcodes:
+                barcode_data = barcode.data.decode('utf-8')
+                barcode_rects_neste_frame.append(barcode.rect)
 
-print("Iniciando scanner... Pressione 'q' para sair.")
-print("-" * 40)
+                # Lógica de atualização de estado
+                if barcode_data.upper().startswith('OBJ;'):
+                    if codigo_obj != barcode_data:
+                        codigo_obj = barcode_data
+                        print(f"[PROCESSAMENTO] Objeto atualizado: {codigo_obj}")
+                elif barcode_data.upper().startswith('APT;'):
+                    if codigo_endereco != barcode_data:
+                        codigo_endereco = barcode_data
+                        print(f"[PROCESSAMENTO] Endereço atualizado: {codigo_endereco}")
 
-# Loop principal de exibição
-while True:
-    with lock:
-        frame = frame_global.copy() if frame_global is not None else None
-        dados = dados_global.copy() if dados_global is not None else None
+            # Lógica de salvamento
+            if codigo_obj and codigo_endereco:
+                print("\n--- [PROCESSAMENTO] PAR COMPLETO DETECTADO ---")
+                dataSave.adicionarLog(codigo_obj, codigo_endereco)
+                
+                # Reseta o estado para a próxima leitura
+                codigo_obj = None
+                codigo_endereco = None
+                
+                print("[PROCESSAMENTO] RESETADO. Aguardando próximo par...")
+                time.sleep(2) # Pausa para evitar rescanear imediatamente
 
-    if frame is None:
-        continue
+            # Atualiza os dados para a thread de exibição
+            with lock:
+                dados_display['barcode_rects'] = barcode_rects_neste_frame
+                dados_display['status_obj'] = f"Objeto: {codigo_obj if codigo_obj else '...'}"
+                dados_display['status_end'] = f"Endereco: {codigo_endereco if codigo_endereco else '...'}"
+        
+        time.sleep(0.1) # Processa ~10 frames por segundo
 
-    if dados:
-        if dados['barcode_info']:
-            info = dados['barcode_info']
-            x, y, w, h = info['rect']
-            barcode_text = f"{info['data']}"
-            print(f"BARCODE LIDO -> {barcode_text}")
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            cv2.putText(frame, barcode_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+# --- BLOCO PRINCIPAL (INICIALIZAÇÃO E LOOP DE EXIBIÇÃO) ---
 
-        if dados['ocr_info_objeto']:
-            info = dados['ocr_info_objeto']
-            ocr_text = f"OCR Objeto: {info['objeto']}"
-            print(f"OCR LIDO (Objeto) -> {ocr_text}")
-            cv2.putText(frame, ocr_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+def main():
+    global executando
 
-        if dados['ocr_info_endereco']:
-            info = dados['ocr_info_endereco']
-            addr_text = f"C:{info['cidade']} B:{info['bairro']} R:{info['rua']} P:{info['predio']} N:{info['nivel']} A:{info['apartamento']}"
-            print(f"OCR LIDO (Endereco) -> {addr_text}")
-            cv2.putText(frame, addr_text, (10, frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+    cap = cv2.VideoCapture(0) # Use o índice correto
+    if not cap.isOpened():
+        print("Erro: Não foi possível abrir a câmera.")
+        return
 
-    cv2.imshow("Scanner Híbrido - Barcode e OCR (Assíncrono)", frame)
+    set_best_resolution(cap)
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+    # Inicia as threads
+    thread_captura = threading.Thread(target=captura_continua, args=(cap,), daemon=True)
+    thread_processamento = threading.Thread(target=processamento_continuo, daemon=True)
+    
+    thread_captura.start()
+    thread_processamento.start()
 
-# Encerramento
-executando = False
-time.sleep(0.5)
-cap.release()
-cv2.destroyAllWindows()
+    print("Iniciando scanner... Pressione 'q' para sair.")
+    print("-" * 40)
+
+    # Loop principal (apenas para exibição)
+    while True:
+        frame_para_exibir = None
+        dados_para_exibir = None
+
+        with lock:
+            if frame_global is not None:
+                frame_para_exibir = frame_global.copy()
+            dados_para_exibir = dados_display.copy()
+
+        if frame_para_exibir is None:
+            time.sleep(0.01)
+            continue
+        
+        # Desenha os retângulos dos barcodes detectados no frame atual
+        if dados_para_exibir and dados_para_exibir['barcode_rects']:
+            for rect in dados_para_exibir['barcode_rects']:
+                x, y, w, h = rect
+                cv2.rectangle(frame_para_exibir, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        
+        # Desenha o painel de status
+        cv2.rectangle(frame_para_exibir, (0,0), (650, 80), (0,0,0), -1)
+        cv2.putText(frame_para_exibir, dados_para_exibir['status_obj'], (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 0), 2)
+        cv2.putText(frame_para_exibir, dados_para_exibir['status_end'], (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 0), 2)
+
+        cv2.imshow("Scanner Assíncrono - Pareamento de Barcodes", frame_para_exibir)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            executando = False
+            break
+
+    # Encerramento
+    print("Encerrando...")
+    time.sleep(0.5) # Dá um tempo para as threads terminarem
+    cap.release()
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()
