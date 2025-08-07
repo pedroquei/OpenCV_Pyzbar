@@ -142,8 +142,8 @@ def main():
         
         # Desenha o painel de status
         cv2.rectangle(frame_para_exibir, (0,0), (650, 80), (0,0,0), -1)
-        cv2.putText(frame_para_exibir, dados_para_exibir['status_obj'], (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 0), 2)
-        cv2.putText(frame_para_exibir, dados_para_exibir['status_end'], (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 0), 2)
+        cv2.putText(frame_para_exibir, dados_para_exibir['status_obj'], (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 0), 1)
+        cv2.putText(frame_para_exibir, dados_para_exibir['status_end'], (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 0), 1)
 
         cv2.imshow("Scanner Assíncrono - Pareamento de Barcodes", frame_para_exibir)
 
